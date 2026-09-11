@@ -2,6 +2,7 @@
 set -euo pipefail
 
 IR_DEVICE="${IR_DEVICE:-/dev/lirc0}"
+PULSE_DIR="${TMPDIR:-/tmp}/indianaline-pulses"
 
 # Timings copied verbatim from lircd.conf. ir-ctl's built-in "nec:" scancode
 # encoder uses standard NEC timings (9000/4500 header, 560/560 or 560/1690
@@ -54,22 +55,28 @@ fi
 
 CODE=$((${BUTTONS[$BUTTON]}))
 
-PULSE_FILE="$(mktemp)"
-trap 'rm -f "$PULSE_FILE"' EXIT
+# ir-ctl requires a seekable regular file for -s: stdin, fifos, and process
+# substitution all get silently truncated (it drops the header) because it
+# seeks while parsing. So the pulse train is cached as a plain file, built
+# once per button and reused on later runs instead of regenerated each time.
+mkdir -p "$PULSE_DIR"
+PULSE_FILE="$PULSE_DIR/$BUTTON.pulse"
 
-{
-  echo "pulse $HEADER_PULSE"
-  echo "space $HEADER_SPACE"
-  for ((bit = 31; bit >= 0; bit--)); do
-    if (((CODE >> bit) & 1)); then
-      echo "pulse $ONE_PULSE"
-      echo "space $ONE_SPACE"
-    else
-      echo "pulse $ZERO_PULSE"
-      echo "space $ZERO_SPACE"
-    fi
-  done
-  echo "pulse $TRAILER_PULSE"
-} > "$PULSE_FILE"
+if [[ ! -e "$PULSE_FILE" ]]; then
+  {
+    echo "pulse $HEADER_PULSE"
+    echo "space $HEADER_SPACE"
+    for ((bit = 31; bit >= 0; bit--)); do
+      if (((CODE >> bit) & 1)); then
+        echo "pulse $ONE_PULSE"
+        echo "space $ONE_SPACE"
+      else
+        echo "pulse $ZERO_PULSE"
+        echo "space $ZERO_SPACE"
+      fi
+    done
+    echo "pulse $TRAILER_PULSE"
+  } > "$PULSE_FILE"
+fi
 
 ir-ctl -d "$IR_DEVICE" -s "$PULSE_FILE"
